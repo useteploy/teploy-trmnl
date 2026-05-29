@@ -1,9 +1,9 @@
 #!/bin/bash
 # trmnl installer — works on macOS, Linux, and WSL
-# Usage: curl -fsSL https://raw.githubusercontent.com/useteploy/trmnl/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/useteploy/teploy-trmnl/main/install.sh | bash
 set -e
 
-TRMNL_REPO="useteploy/trmnl"
+TRMNL_REPO="useteploy/teploy-trmnl"
 TRMNL_BRANCH="main"
 INSTALL_DIR="$HOME/.local/share/trmnl"
 BIN_DIR="$HOME/.local/bin"

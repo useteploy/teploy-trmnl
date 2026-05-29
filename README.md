@@ -8,7 +8,7 @@ A preconfigured terminal development environment built on Neovim, Zellij, and mo
 
 ```bash
 brew tap useteploy/tap
-brew install trmnl
+brew install teploy-trmnl
 trmnl setup
 source ~/.zshrc
 ```
@@ -22,7 +22,7 @@ wsl --install
 eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 
 brew tap useteploy/tap
-brew install trmnl
+brew install teploy-trmnl
 trmnl setup
 ```
 
