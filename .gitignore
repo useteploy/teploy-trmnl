@@ -18,3 +18,7 @@ nvim/.netrwhist
 # Build
 dist/
 build/
+
+# Private notes — local only, never committed
+/_internal/
+/INTERNAL.md
