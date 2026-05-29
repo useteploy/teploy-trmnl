@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint shell scripts
+        # --severity=warning skips info-level style nits (e.g. SC2086 on
+        # space-free paths, and the intentional literal $() inside install.sh's
+        # sed expression) while still catching real bugs.
+        run: shellcheck --severity=warning install.sh test_suite.sh
+
+  lua-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Neovim
+        run: sudo apt-get update && sudo apt-get install -y neovim
+      - name: Parse-check all Lua config
+        # loadfile() compiles each chunk without executing it, so this catches
+        # genuine syntax errors without needing the plugin runtime (unlike a
+        # dofile-based check, which conflates runtime errors with syntax ones).
+        run: |
+          rc=0
+          while IFS= read -r f; do
+            result=$(nvim --headless \
+              -c "lua local _,e=loadfile('$f'); print(e and ('SYNTAX_ERROR '..e) or 'PARSE_OK')" \
+              -c "qa" 2>&1)
+            if ! printf '%s' "$result" | grep -q 'PARSE_OK'; then
+              echo "::error file=$f::$result"
+              rc=1
+            fi
+          done < <(find config -name '*.lua')
+          exit $rc

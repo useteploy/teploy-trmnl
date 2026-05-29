@@ -26,17 +26,17 @@ echo ""
 # ── Helper Functions ──────────────────────────────────────────────
 test_pass() {
   echo -e "  ${GREEN}✓${NC} $1"
-  ((PASS++))
+  PASS=$((PASS + 1))
 }
 
 test_fail() {
   echo -e "  ${RED}✗${NC} $1"
-  ((FAIL++))
+  FAIL=$((FAIL + 1))
 }
 
 test_warn() {
   echo -e "  ${YELLOW}!${NC} $1"
-  ((WARN++))
+  WARN=$((WARN + 1))
 }
 
 # ── TEST 1: File Structure ────────────────────────────────────────
