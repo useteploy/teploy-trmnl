@@ -74,6 +74,12 @@ trmnl uninstall    # Remove config symlinks
 | Scroll | `Ctrl+s` | Enter scroll mode |
 | Session | `Ctrl+o` | Enter session mode |
 
+#### Neovim pass-through (autolock)
+
+A bundled headless plugin ([`zellij-autolock`](https://github.com/fresh2dev/zellij-autolock)) keeps Zellij's hotkeys from clobbering Neovim. When the focused pane runs `nvim`/`vim`/`fzf`/`lazygit`/`yazi`/`less`/`man`/`git`, Zellij auto-switches to **locked** mode, so every `Ctrl` key (`Ctrl+o` jumplist, `Ctrl+p`/`Ctrl+n` completion, `Ctrl+t` tags, `Ctrl+b` page-up, ...) goes straight to that program. Back in a shell pane it unlocks and the direct hotkeys above work again.
+
+To run a Zellij action *over* a Neovim pane: press `Ctrl+g` to take manual control (disables autolock + unlocks), do your thing (e.g. `Ctrl+p` then `x` to close the pane), then `Ctrl+g` again to hand control back to autolock.
+
 ### Neovim
 
 | Key | Action |

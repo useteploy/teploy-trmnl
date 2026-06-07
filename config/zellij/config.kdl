@@ -2,7 +2,12 @@
 
 keybinds clear-defaults=true {
     locked {
-        bind "Ctrl g" { SwitchToMode "normal"; }
+        // Take manual control: stop autolock and unlock, so Zellij hotkeys
+        // work even over a neovim pane (e.g. Ctrl+p then x to close it).
+        bind "Ctrl g" {
+            MessagePlugin "autolock" { payload "disable"; };
+            SwitchToMode "normal";
+        }
     }
     pane {
         bind "left" { MoveFocus "left"; }
@@ -131,7 +136,12 @@ keybinds clear-defaults=true {
         }
     }
     shared_except "locked" {
-        bind "Ctrl g" { SwitchToMode "locked"; }
+        // Hand control back to autolock: re-enable and reassess now (it will
+        // lock again if the focused pane is running neovim, fzf, etc.).
+        bind "Ctrl g" {
+            MessagePlugin "autolock" { payload "enable"; };
+            MessagePlugin "autolock" {};
+        }
         bind "Ctrl q" { Quit; }
     }
     shared_except "locked" "move" {
@@ -223,6 +233,14 @@ keybinds clear-defaults=true {
 }
 
 plugins {
+    // Headless: auto-locks Zellij when the focused pane runs one of these
+    // programs (so their Ctrl keys reach them), unlocks back in the shell.
+    autolock location="file:~/.config/zellij/plugins/zellij-autolock.wasm" {
+        is_enabled true
+        triggers "nvim|vim|fzf|lazygit|yazi|less|man|git"
+        reaction_seconds "0.3"
+        print_to_log false
+    }
     compact-bar location="zellij:compact-bar";
     configuration location="zellij:configuration";
     filepicker location="zellij:strider";
@@ -232,6 +250,11 @@ plugins {
     strider location="zellij:strider";
     tab-bar location="zellij:tab-bar";
     welcome-screen location="zellij:session-manager" { welcome_screen true; };
+}
+
+// Load the headless autolock plugin on startup.
+load_plugins {
+    autolock
 }
 
 theme "tokyo-night"
