@@ -73,6 +73,13 @@ trmnl uninstall    # Remove config symlinks
 | Resize | `Ctrl+n` | Enter resize mode |
 | Scroll | `Ctrl+s` | Enter scroll mode |
 | Session | `Ctrl+o` | Enter session mode |
+| Quit | `Ctrl+q` | Quit Zellij (drops to a normal shell) |
+
+#### Exiting Zellij
+
+Zellij auto-starts in interactive shells. To leave it, press `Ctrl+q` (or run `exit` until the last pane closes) — you'll land back in a normal shell prompt instead of the terminal closing. Run `zellij` to re-enter.
+
+To stop the auto-launch entirely, set `TRMNL_NO_AUTOLAUNCH=1` (e.g. `export TRMNL_NO_AUTOLAUNCH=1` before opening a shell, or add it to your `~/.zshrc` above the trmnl block).
 
 #### Neovim pass-through (autolock)
 

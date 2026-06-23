@@ -1,12 +1,20 @@
 # ── trmnl Terminal IDE ──────────────────────────────────────────
 
 # ── Multiplexer Auto-Launch ──────────────────────────────────────
-# Auto-start Zellij when opening a new shell (skip if already inside one)
-if [ -z "$ZELLIJ" ]; then
+# Auto-start Zellij for interactive shells. Skipped when already inside a
+# multiplexer, or when TRMNL_NO_AUTOLAUNCH is set (export it to opt out).
+#
+# Note: we run zellij WITHOUT `exec` on purpose. That keeps the login shell
+# as a parent, so quitting zellij (Ctrl+q, or `exit` on the last pane) drops
+# you back to a normal shell prompt instead of closing the terminal. To
+# re-enter, just run `zellij`.
+if [[ $- == *i* ]] && [ -z "$ZELLIJ" ] && [ -z "$TRMNL_NO_AUTOLAUNCH" ]; then
   if command -v zellij &>/dev/null; then
-    exec zellij
+    zellij
+    TRMNL_NO_AUTOLAUNCH=1   # don't relaunch in this shell after quitting
   elif command -v tmux &>/dev/null && [ -z "$TMUX" ]; then
-    exec tmux
+    tmux
+    TRMNL_NO_AUTOLAUNCH=1
   fi
 fi
 
