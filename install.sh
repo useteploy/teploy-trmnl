@@ -220,6 +220,24 @@ install_deps() {
     else
         info "btop already installed"
     fi
+
+    # API + DB clients (atac = TUI API client, hurl = HTTP-as-code, lazysql = DB
+    # browser). Reliably packaged only via Homebrew; elsewhere point at upstream
+    # install docs. Graceful (warn, never fail) — consistent with the tools above.
+    for entry in "atac|https://github.com/Julien-cpsn/ATAC#installation" \
+                 "hurl|https://hurl.dev/docs/installation.html" \
+                 "lazysql|https://github.com/jorgerojas26/lazysql#installation"; do
+        cmd="${entry%%|*}"; link="${entry#*|}"
+        if ! command -v "$cmd" &>/dev/null; then
+            if [ "$PKG" = "brew" ]; then
+                brew install "$cmd" 2>/dev/null || warn "Failed to install $cmd — see $link"
+            else
+                warn "Install $cmd manually: $link"
+            fi
+        else
+            info "$cmd already installed"
+        fi
+    done
 }
 
 # ── Download and install trmnl configs ──────────────

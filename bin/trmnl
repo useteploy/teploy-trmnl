@@ -204,6 +204,9 @@ cmd_doctor() {
     check_tool tldr
     check_tool gh
     check_tool jq
+    check_tool atac
+    check_tool hurl
+    check_tool lazysql
 
     echo ""
 
