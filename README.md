@@ -8,7 +8,7 @@ A preconfigured terminal development environment built on Neovim, Zellij, and mo
 
 ```bash
 brew tap useteploy/tap
-brew install teploy-trmnl
+brew install trmnl
 trmnl setup
 source ~/.zshrc
 ```
@@ -22,7 +22,7 @@ wsl --install
 eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 
 brew tap useteploy/tap
-brew install teploy-trmnl
+brew install trmnl
 trmnl setup
 ```
 
@@ -41,6 +41,12 @@ trmnl setup
 ### CLI Tools
 
 bat, eza, delta, starship, fzf, zoxide, ripgrep, fd, btop, tldr, gh, jq
+
+### API & Database Clients
+
+- **atac** — TUI API client (Postman-style, git-friendly collections)
+- **hurl** — plain-text HTTP requests and assertions, request-as-code for CI
+- **lazysql** — TUI database client (browse/query Postgres, MySQL, SQLite)
 
 ### Shell Integration
 
