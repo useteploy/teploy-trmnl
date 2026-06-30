@@ -131,6 +131,20 @@ See `CONFIG_GUIDE_COMPLETE.md` for detailed setup of each tool.
 - Recommended terminal: [Ghostty](https://ghostty.org) (`brew install --cask ghostty`)
 - Optional: `ANTHROPIC_API_KEY` for AI features
 
+## Credits
+
+trmnl curates and configures open source tools — it does not reimplement them.
+Full credit goes to the authors and maintainers of every project it bundles or
+depends on. The Neovim configuration is derived from
+[kickstart.nvim](https://github.com/nvim-lua/kickstart.nvim) by TJ DeVries, and
+the look is based on [Tokyo Night](https://github.com/folke/tokyonight.nvim).
+
+See **[CREDITS.md](CREDITS.md)** for the complete list of every project, its
+upstream, and its license.
+
 ## License
 
-MIT
+The MIT license in [`LICENSE`](LICENSE) covers trmnl's own scripts,
+configuration, and glue code. Every bundled or depended-on project is governed by
+its own license; see [CREDITS.md](CREDITS.md). Vendored components retain their
+original license and copyright notices in place (e.g. `config/nvim/LICENSE.md`).
