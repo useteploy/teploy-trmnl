@@ -58,7 +58,7 @@ return {
         -- Update this to ensure that you have the debuggers for the langs you want
         'delve',        -- Go
         'debugpy',      -- Python
-        'node-debug2',  -- Node.js
+        'js',           -- vscode-js-debug (Mason js-debug-adapter)
       },
     }
 
@@ -117,11 +117,15 @@ return {
     require('dap-python').setup(python_path)
 
     -- Install node specific config (wrapped in pcall — adapter may not be installed yet)
-    local ok, _ = pcall(function()
-      local path = require('mason-registry').get_package('node-debug2-adapter'):get_install_path()
+    local ok, err = pcall(function()
+      local path = vim.fn.stdpath 'data' .. '/mason/packages/js-debug-adapter'
+      if vim.fn.isdirectory(path .. '/js-debug') ~= 1 or vim.fn.filereadable(path .. '/js-debug/src/dapDebugServer.js') ~= 1 then
+        error('Missing vscode-js-debug directory: ' .. path .. '/js-debug')
+      end
       require('dap-vscode-js').setup {
         node_path = 'node',
-        debugger_path = path .. '/out/src/debugAdapter.js',
+        debugger_path = path .. '/js-debug',
+        debugger_cmd = { 'node', path .. '/js-debug/src/dapDebugServer.js' },
         adapters = { 'pwa-node', 'pwa-chrome' },
       }
 
@@ -131,14 +135,14 @@ return {
             type = 'pwa-node',
             request = 'launch',
             name = 'Launch Program',
-            program = '${workspaceFolder}/${file}',
+            program = '${file}',
             cwd = '${workspaceFolder}',
           },
         }
       end
     end)
     if not ok then
-      vim.notify('Node.js debugger not installed yet — run :Mason to install node-debug2-adapter', vim.log.levels.WARN)
+      vim.notify('JavaScript debugger setup failed: ' .. tostring(err) .. ' — install js-debug-adapter with :Mason', vim.log.levels.WARN)
     end
   end,
 }

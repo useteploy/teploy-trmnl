@@ -3,5 +3,5 @@ hovered = { bg = "#4a5272", fg = "#e0e4f5" }
 
 [filetype]
 rules = [
-  { name = "*/", fg = "#9cc4ff" },
+  { url = "*/", fg = "#9cc4ff" },
 ]

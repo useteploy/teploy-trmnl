@@ -15,7 +15,7 @@ jobs:
         # --severity=warning skips info-level style nits (e.g. SC2086 on
         # space-free paths, and the intentional literal $() inside install.sh's
         # sed expression) while still catching real bugs.
-        run: shellcheck --severity=warning install.sh test_suite.sh
+        run: shellcheck --severity=warning install.sh bin/trmnl test_suite.sh
 
   lua-syntax:
     runs-on: ubuntu-latest
@@ -30,12 +30,19 @@ jobs:
         run: |
           rc=0
           while IFS= read -r f; do
-            result=$(nvim --headless \
-              -c "lua local _,e=loadfile('$f'); print(e and ('SYNTAX_ERROR '..e) or 'PARSE_OK')" \
-              -c "qa" 2>&1)
-            if ! printf '%s' "$result" | grep -q 'PARSE_OK'; then
-              echo "::error file=$f::$result"
+            if ! TRMNL_CHECK_FILE="$f" nvim --headless -u NONE -i NONE --noplugin -n \
+              -c 'lua local f,e=loadfile(os.getenv("TRMNL_CHECK_FILE")); if not f then print(e); vim.cmd("cquit 1") end' \
+              -c 'qa!'; then
               rc=1
             fi
           done < <(find config -name '*.lua')
-          exit $rc
+          exit "$rc"
+      - name: Check literal mapping modes without executing configuration
+        run: python3 tests/check_keymaps.py config/nvim
+
+  manager-transactions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check actual manager recovery in private HOME and XDG fixtures
+        run: python3 tests/check_transactions.py "$RUNNER_TEMP/trmnl-transactions"

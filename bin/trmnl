@@ -2,17 +2,45 @@
 # trmnl — Terminal IDE manager
 set -e
 
-TRMNL_VERSION="0.1.0"
-TRMNL_DIR="$(brew --prefix)/share/trmnl"
-CONFIG_DIR="$HOME/.config"
-
-# Cross-platform sed in-place (macOS uses -i '', GNU/Linux uses -i)
-sedi() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "$@"
+TRMNL_VERSION="0.1.2"
+if [ -z "${TRMNL_DIR:-}" ]; then
+    if command -v brew >/dev/null; then
+        TRMNL_DIR="$(brew --prefix)/share/trmnl"
     else
-        sed -i "$@"
+        TRMNL_DIR="$HOME/.local/share/trmnl"
     fi
+fi
+case "$TRMNL_DIR" in /*) ;; *) echo "TRMNL_DIR must be absolute" >&2; exit 1 ;; esac
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+STATE_DIR="$CONFIG_DIR/.trmnl-links"
+
+# Exact full-line delimiters shared by setup, doctor and uninstall.
+SHELL_START='# ── trmnl Terminal IDE ──────────────────────────────────────────'
+SHELL_END='# ── End trmnl Configuration ──────────────────────────────────────'
+
+# Write only to a caller-owned temporary file. Reject incomplete/nested blocks
+# rather than consuming unrelated user content after an unmatched marker.
+shell_content() {
+    local input="$1" output="$2" block="${3:-}"
+    awk -v start="$SHELL_START" -v end="$SHELL_END" '
+        $0 == start { if (inside) exit 2; inside=1; next }
+        $0 == end { if (!inside) exit 2; inside=0; next }
+        !inside { print }
+        END { if (inside) exit 2 }
+    ' "$input" > "$output" || return 1
+    [ -z "$block" ] || cat "$block" >> "$output"
+}
+
+source_preflight() {
+    local item
+    for item in nvim/init.lua zellij/config.kdl zellij/layouts/dev.kdl zellij/plugins/zellij-autolock.wasm yazi/yazi.toml yazi/keymap.toml yazi/theme.toml ghostty/config starship.toml trmnl-gitconfig zshrc-block; do
+        [ -s "$TRMNL_DIR/$item" ] || { echo "Missing source: $TRMNL_DIR/$item" >&2; return 1; }
+    done
+    [ "$(head -n 1 "$TRMNL_DIR/zshrc-block")" = "$SHELL_START" ] &&
+        [ "$(tail -n 1 "$TRMNL_DIR/zshrc-block")" = "$SHELL_END" ] || {
+        echo 'Invalid shell block delimiters' >&2; return 1;
+    }
+    bash -n "$TRMNL_DIR/zshrc-block"
 }
 
 # ── Colors ──────────────────────────────────────────
@@ -33,88 +61,193 @@ banner() {
     echo ""
 }
 
-# ── Setup ───────────────────────────────────────────
-cmd_setup() {
-    banner
+# Recovery uses successful filesystem transitions, not pre-command flags.
+# Intent files precede commands; backup/candidate existence resolves the signal
+# window between a command completing and the shell handling HUP/INT/TERM.
+path_exists() { [ -e "$1" ] || [ -L "$1" ]; }
 
-    echo -e "${BOLD}Setting up Terminal IDE...${NC}"
-    echo ""
-
-    # Backup existing configs
-    local backed_up=false
-    local backup_dir="$HOME/.config-backup-$(date +%Y%m%d-%H%M%S)"
-
-    for item in nvim zellij yazi starship.toml; do
-        local target="$CONFIG_DIR/$item"
-        if [ -e "$target" ] && [ ! -L "$target" ]; then
-            mkdir -p "$backup_dir"
-            cp -r "$target" "$backup_dir/"
-            backed_up=true
+recover_transaction() {
+    local txn="$1" kind item dest entry
+    kind="$(cat "$txn/kind")" || return 1
+    case "$kind" in setup|uninstall) ;; *) return 1 ;; esac
+    for item in zshrc gitconfig; do
+        if [ -f "$txn/publish-$item" ] && [ ! -e "$txn/$item" ]; then
+            if [ -f "$txn/old-$item" ]; then
+                cp -p "$txn/old-$item" "$txn/recover-$item" || return 1
+                mv "$txn/recover-$item" "$HOME/.$item" || return 1
+            else
+                rm -f "$HOME/.$item" || return 1
+            fi
+            rm "$txn/publish-$item" || return 1
         fi
     done
-
-    if [ "$backed_up" = true ]; then
-        echo -e "  ${YELLOW}→${NC} Existing configs backed up to $backup_dir"
-    fi
-
-    # Link configs
-    echo -e "  ${GREEN}→${NC} Linking configs..."
-    mkdir -p "$CONFIG_DIR"
-
-    link_item() {
-        local src="$1" dest="$2"
-        [ -L "$dest" ] && rm "$dest"
-        [ -e "$dest" ] && rm -rf "$dest"
-        ln -s "$src" "$dest"
-    }
-
-    link_item "$TRMNL_DIR/nvim"          "$CONFIG_DIR/nvim"
-    link_item "$TRMNL_DIR/zellij"        "$CONFIG_DIR/zellij"
-    link_item "$TRMNL_DIR/yazi"          "$CONFIG_DIR/yazi"
-    link_item "$TRMNL_DIR/starship.toml" "$CONFIG_DIR/starship.toml"
-
-    echo -e "    ${GREEN}✓${NC} nvim"
-    echo -e "    ${GREEN}✓${NC} zellij"
-    echo -e "    ${GREEN}✓${NC} yazi"
-    echo -e "    ${GREEN}✓${NC} starship"
-
-    # Git config — include trmnl settings without replacing user's gitconfig
-    local gitconfig="$HOME/.gitconfig"
-    local include_path="$TRMNL_DIR/trmnl-gitconfig"
-    if [ -f "$gitconfig" ]; then
-        if ! grep -q "path = $include_path" "$gitconfig" 2>/dev/null; then
-            echo "" >> "$gitconfig"
-            echo "[include]" >> "$gitconfig"
-            echo "    path = $include_path" >> "$gitconfig"
-            echo -e "    ${GREEN}✓${NC} gitconfig (include added)"
-        else
-            echo -e "    ${GREEN}✓${NC} gitconfig (already configured)"
+    if [ "$kind" = setup ]; then
+        if [ -d "$txn/journal-before" ]; then
+            [ ! -e "$STATE_DIR" ] || rm -rf "$STATE_DIR" || return 1
+            mv "$txn/journal-before" "$STATE_DIR" || return 1
+        elif [ -f "$txn/journal-absent" ] && [ ! -d "$txn/journal" ]; then
+            [ ! -e "$STATE_DIR" ] || rm -rf "$STATE_DIR" || return 1
         fi
+        for item in nvim zellij yazi starship.toml; do
+            dest="$CONFIG_DIR/$item"
+            if path_exists "$txn/targets/$item"; then
+                if path_exists "$dest"; then
+                    [ -L "$dest" ] && [ "$(readlink "$dest")" = "$TRMNL_DIR/$item" ] || return 1
+                    rm "$dest" || return 1
+                fi
+                mv "$txn/targets/$item" "$dest" || return 1
+            elif [ -f "$txn/absent-$item" ]; then
+                if path_exists "$dest"; then
+                    [ -L "$dest" ] && [ "$(readlink "$dest")" = "$TRMNL_DIR/$item" ] || return 1
+                    rm "$dest" || return 1
+                fi
+            fi
+        done
     else
-        echo "[include]" > "$gitconfig"
-        echo "    path = $include_path" >> "$gitconfig"
-        echo -e "    ${GREEN}✓${NC} gitconfig (created with include)"
+        for item in nvim zellij yazi starship.toml; do
+            dest="$CONFIG_DIR/$item"; entry="$STATE_DIR/$item"
+            if [ -d "$txn/entries/$item" ]; then
+                [ ! -e "$entry" ] || return 1
+                mv "$txn/entries/$item" "$entry" || return 1
+            fi
+            if path_exists "$txn/removed-$item"; then
+                if [ -f "$txn/previous-$item" ] && ! path_exists "$entry/previous"; then
+                    path_exists "$dest" || return 1
+                    mv "$dest" "$entry/previous" || return 1
+                fi
+                ! path_exists "$dest" || return 1
+                mv "$txn/removed-$item" "$dest" || return 1
+            fi
+        done
     fi
-
-    # Append shell config
-    if ! grep -q "# ── trmnl ──" "$HOME/.zshrc" 2>/dev/null; then
-        echo "" >> "$HOME/.zshrc"
-        cat "$TRMNL_DIR/zshrc-block" >> "$HOME/.zshrc"
-        echo -e "    ${GREEN}✓${NC} zshrc"
-    else
-        echo -e "    ${GREEN}✓${NC} zshrc (already configured)"
-    fi
-
-    echo ""
-    echo -e "${GREEN}${BOLD}  Setup complete!${NC}"
-    echo ""
-    echo -e "  Run: ${BOLD}source ~/.zshrc${NC}"
-    echo -e "  Then: ${BOLD}zellij${NC}"
-    echo ""
-    echo -e "  ${DIM}Ghostty config available at: $TRMNL_DIR/ghostty/config${NC}"
-    echo -e "  ${DIM}Copy to ~/.config/ghostty/config if using Ghostty.${NC}"
-    echo ""
 }
+
+finish_transaction() {
+    local status=$?
+    trap - EXIT
+    # Recovery cannot itself be interrupted by a second catchable signal.
+    trap '' HUP INT TERM
+    if [ "$status" -ne 0 ] && ! recover_transaction "$txn"; then
+        echo "Recovery incomplete; retained private transaction: $txn" >&2
+        printf 'Retry with the same HOME, XDG_CONFIG_HOME and TRMNL_DIR: trmnl recover %q\n' "$txn" >&2
+        exit "$status"
+    fi
+    rm -rf "$txn"
+    exit "$status"
+}
+
+cmd_recover() (
+    set -e
+    umask 077
+    txn="${1:-}"
+    case "$txn" in "$HOME"/.trmnl-setup.*|"$HOME"/.trmnl-uninstall.*) ;; *) echo 'Invalid recovery path' >&2; exit 1 ;; esac
+    [ -d "$txn" ] && [ ! -L "$txn" ] || exit 1
+    # Bind recovery to the original destinations; metadata is data, never code.
+    [ "$(cat "$txn/home")" = "$HOME" ] &&
+        [ "$(cat "$txn/config")" = "$CONFIG_DIR" ] &&
+        [ "$(cat "$txn/source")" = "$TRMNL_DIR" ] || { echo 'Recovery environment differs' >&2; exit 1; }
+    trap '' HUP INT TERM
+    if ! recover_transaction "$txn"; then
+        echo "Recovery incomplete; retained private transaction: $txn" >&2
+        exit 1
+    fi
+    rm -rf "$txn"
+    echo 'Restored pre-transaction configuration.'
+)
+
+refuse_pending_recovery() {
+    local pending
+    for pending in "$HOME"/.trmnl-setup.* "$HOME"/.trmnl-uninstall.*; do
+        [ -d "$pending" ] && [ ! -L "$pending" ] || continue
+        if [ -f "$pending/kind" ] && [ "$(cat "$pending/config")" = "$CONFIG_DIR" ]; then
+            printf 'Pending recovery; run with the original environment: trmnl recover %q\n' "$pending" >&2
+            return 1
+        fi
+    done
+}
+
+prepare_transaction() {
+    printf '%s\n' "$1" > "$txn/kind"
+    printf '%s\n' "$HOME" > "$txn/home"
+    printf '%s\n' "$CONFIG_DIR" > "$txn/config"
+    printf '%s\n' "$TRMNL_DIR" > "$txn/source"
+    mkdir "$txn/targets" "$txn/entries" "$txn/journal"
+    trap finish_transaction EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+}
+
+# ── Setup ───────────────────────────────────────────
+cmd_setup() (
+    set -e
+    umask 077
+    source_preflight
+    banner
+    case "$CONFIG_DIR" in /*) ;; *) echo 'XDG_CONFIG_HOME must be absolute' >&2; exit 1 ;; esac
+    # Never interpret a manifest as shell code or follow a journal symlink.
+    [ ! -L "$STATE_DIR" ] || { echo 'Refusing symlink journal' >&2; exit 1; }
+    for file in "$HOME/.zshrc" "$HOME/.gitconfig"; do
+        [ ! -L "$file" ] && { [ ! -e "$file" ] || [ -f "$file" ]; } || {
+            echo "Refusing non-regular configuration file: $file" >&2; exit 1;
+        }
+    done
+    command -v git >/dev/null || { echo 'git is required for setup' >&2; exit 1; }
+    txn='' item='' src='' dest='' current='' entry=''
+    refuse_pending_recovery
+    txn="$(mktemp -d "$HOME/.trmnl-setup.XXXXXXXX")"
+    prepare_transaction setup
+    if [ -d "$STATE_DIR" ]; then
+        for item in nvim zellij yazi starship.toml; do
+            [ ! -L "$STATE_DIR/$item" ] && [ ! -L "$STATE_DIR/$item/owned" ] || {
+                echo 'Refusing symlink journal entry' >&2; exit 1;
+            }
+        done
+        cp -pRP "$STATE_DIR/." "$txn/journal/"
+    fi
+    if [ -f "$HOME/.zshrc" ]; then cp -p "$HOME/.zshrc" "$txn/old-zshrc"; else : > "$txn/input-zshrc"; fi
+    shell_content "${txn}/$(if [ -f "$txn/old-zshrc" ]; then echo old-zshrc; else echo input-zshrc; fi)" "$txn/zshrc" "$TRMNL_DIR/zshrc-block"
+    [ ! -f "$HOME/.zshrc" ] || chmod "$(stat -f %Lp "$HOME/.zshrc" 2>/dev/null || stat -c %a "$HOME/.zshrc")" "$txn/zshrc"
+    if [ -f "$HOME/.gitconfig" ]; then cp -p "$HOME/.gitconfig" "$txn/old-gitconfig"; cp -p "$HOME/.gitconfig" "$txn/gitconfig"; else : > "$txn/gitconfig"; fi
+    if ! git config --file "$txn/gitconfig" --get-all include.path | grep -Fxq "$TRMNL_DIR/trmnl-gitconfig"; then
+        git config --file "$txn/gitconfig" --add include.path "$TRMNL_DIR/trmnl-gitconfig"
+    fi
+    mkdir -p "$CONFIG_DIR"
+    for item in nvim zellij yazi starship.toml; do
+        src="$TRMNL_DIR/$item"; dest="$CONFIG_DIR/$item"; entry="$txn/journal/$item"
+        current=''
+        [ ! -L "$dest" ] || current="$(readlink "$dest")"
+        if [ -L "$dest" ] && [ -s "$entry/owned" ] && [ ! -L "$entry/owned" ] && [ "$current" = "$(cat "$entry/owned")" ]; then
+            : # Preserve the original predecessor across repeated setup.
+        else
+            # Keep older displaced predecessors if the user changed this link.
+            if [ -e "$entry" ]; then
+                mkdir -p "$txn/journal/history"
+                mv "$entry" "$(mktemp -d "$txn/journal/history/$item.XXXXXXXX")/entry"
+            fi
+            mkdir "$entry"
+            if [ -e "$dest" ] || [ -L "$dest" ]; then cp -pRP "$dest" "$entry/previous"; fi
+        fi
+        printf '%s\n' "$src" > "$entry/owned"
+        if path_exists "$dest"; then
+            mv "$dest" "$txn/targets/$item"
+        else
+            : > "$txn/absent-$item"
+        fi
+        ln -s "$src" "$dest"
+    done
+    if [ -d "$STATE_DIR" ]; then
+        mv "$STATE_DIR" "$txn/journal-before"
+    else
+        : > "$txn/journal-absent"
+    fi
+    mv "$txn/journal" "$STATE_DIR"
+    : > "$txn/publish-gitconfig"
+    mv "$txn/gitconfig" "$HOME/.gitconfig"
+    : > "$txn/publish-zshrc"
+    mv "$txn/zshrc" "$HOME/.zshrc"
+    echo 'Setup complete. Previous configurations are retained in the owned-link journal.'
+)
 
 # ── Keys ────────────────────────────────────────────
 cmd_keys() {
@@ -176,11 +309,17 @@ cmd_doctor() {
     echo ""
 
     local all_good=true
+    if ! source_preflight; then all_good=false; fi
 
     check_tool() {
-        if command -v "$1" &>/dev/null; then
+        if [ -x "$(command -v "$1" 2>/dev/null)" ]; then
             local ver
-            ver=$("$1" --version 2>/dev/null | head -1 || echo "installed")
+            if ! ver=$("$1" --version 2>&1); then
+                echo "Required tool failed: $1" >&2
+                all_good=false
+                return
+            fi
+            ver="${ver%%$'\n'*}"
             echo -e "  ${GREEN}✓${NC} $1 ${DIM}$ver${NC}"
         else
             echo -e "  ${RED}✗${NC} $1 ${RED}not found${NC}"
@@ -244,7 +383,7 @@ cmd_doctor() {
     check_config "$CONFIG_DIR/starship.toml" "starship"
 
     # Check gitconfig include
-    if grep -q "trmnl-gitconfig" "$HOME/.gitconfig" 2>/dev/null; then
+    if git config --file "$HOME/.gitconfig" --get-all include.path 2>/dev/null | grep -Fxq "$TRMNL_DIR/trmnl-gitconfig"; then
         echo -e "  ${GREEN}✓${NC} gitconfig (trmnl include)"
     else
         echo -e "  ${RED}✗${NC} gitconfig ${RED}trmnl include missing${NC} — run ${BOLD}trmnl setup${NC}"
@@ -252,7 +391,7 @@ cmd_doctor() {
     fi
 
     # Check zshrc block
-    if grep -q "# ── trmnl Terminal IDE ──" "$HOME/.zshrc" 2>/dev/null; then
+    if [ "$(grep -Fxc "$SHELL_START" "$HOME/.zshrc" 2>/dev/null)" = 1 ] && [ "$(grep -Fxc "$SHELL_END" "$HOME/.zshrc" 2>/dev/null)" = 1 ] && shell_content "$HOME/.zshrc" /dev/null; then
         echo -e "  ${GREEN}✓${NC} zshrc (trmnl block)"
     else
         echo -e "  ${RED}✗${NC} zshrc ${RED}trmnl block missing${NC} — run ${BOLD}trmnl setup${NC}"
@@ -261,8 +400,13 @@ cmd_doctor() {
 
     echo ""
 
-    # Check font
-    if fc-list 2>/dev/null | grep -qi "JetBrainsMono Nerd" || [ -d "$HOME/Library/Fonts" ] && ls "$HOME/Library/Fonts" 2>/dev/null | grep -qi "JetBrainsMono"; then
+    # Optional font detection; either fontconfig or macOS user fonts suffice.
+    local font_found=false font
+    if fc-list 2>/dev/null | grep -qi "JetBrainsMono Nerd"; then font_found=true; fi
+    for font in "$HOME/Library/Fonts/"*JetBrainsMono*; do
+        [ ! -e "$font" ] || font_found=true
+    done
+    if [ "$font_found" = true ]; then
         echo -e "  ${GREEN}✓${NC} JetBrains Mono Nerd Font"
     else
         echo -e "  ${YELLOW}?${NC} JetBrains Mono Nerd Font ${DIM}(may still be installed)${NC}"
@@ -275,46 +419,61 @@ cmd_doctor() {
         echo -e "  ${YELLOW}${BOLD}Some items need attention.${NC}"
     fi
     echo ""
+    [ "$all_good" = true ]
 }
 
 # ── Uninstall ───────────────────────────────────────
-cmd_uninstall() {
-    echo ""
-    echo -e "${YELLOW}${BOLD}  This will remove trmnl config symlinks.${NC}"
-    echo -e "  ${DIM}(Tools stay installed, only configs are unlinked)${NC}"
-    echo ""
-    read -p "  Continue? [y/N] " -n 1 -r
-    echo ""
-
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        for item in "$CONFIG_DIR/nvim" "$CONFIG_DIR/zellij" "$CONFIG_DIR/yazi" "$CONFIG_DIR/starship.toml"; do
-            if [ -L "$item" ]; then
-                rm "$item"
-                echo -e "  ${GREEN}✓${NC} Removed $(basename "$item")"
-            fi
-        done
-
-        # Remove gitconfig include line
-        if [ -f "$HOME/.gitconfig" ]; then
-            local include_path="$TRMNL_DIR/trmnl-gitconfig"
-            sedi "/path = ${include_path//\//\\/}/d" "$HOME/.gitconfig" 2>/dev/null
-            sedi '/^\[include\]$/{ N; /^\[include\]\n$/d; }' "$HOME/.gitconfig" 2>/dev/null
-            echo -e "  ${GREEN}✓${NC} Removed gitconfig include"
-        fi
-
-        # Remove zshrc-block content
-        if [ -f "$HOME/.zshrc" ] && grep -q "# ── trmnl Terminal IDE ──" "$HOME/.zshrc" 2>/dev/null; then
-            sedi '/# ── trmnl Terminal IDE ──/,/# ── End trmnl Configuration ──/d' "$HOME/.zshrc" 2>/dev/null
-            echo -e "  ${GREEN}✓${NC} Removed zshrc block"
-        fi
-
-        echo ""
-        echo -e "  ${GREEN}Done.${NC} Restore backups from ~/.config-backup-* if needed."
-    else
-        echo -e "  ${DIM}Cancelled.${NC}"
+cmd_uninstall() (
+    set -e
+    umask 077
+    item='' dest='' entry='' txn=''
+    read -p "Remove owned trmnl configuration links? [y/N] " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] || return 0
+    case "$CONFIG_DIR" in /*) ;; *) echo 'XDG_CONFIG_HOME must be absolute' >&2; exit 1 ;; esac
+    [ ! -L "$STATE_DIR" ] || { echo 'Refusing symlink journal' >&2; exit 1; }
+    for item in .zshrc .gitconfig; do
+        [ ! -L "$HOME/$item" ] && { [ ! -e "$HOME/$item" ] || [ -f "$HOME/$item" ]; } || {
+            echo "Refusing non-regular configuration file: $item" >&2; exit 1;
+        }
+    done
+    refuse_pending_recovery
+    txn="$(mktemp -d "$HOME/.trmnl-uninstall.XXXXXXXX")"
+    prepare_transaction uninstall
+    if [ -f "$HOME/.zshrc" ]; then
+        cp -p "$HOME/.zshrc" "$txn/old-zshrc"
+        shell_content "$HOME/.zshrc" "$txn/zshrc"
+        chmod "$(stat -f %Lp "$HOME/.zshrc" 2>/dev/null || stat -c %a "$HOME/.zshrc")" "$txn/zshrc"
     fi
-    echo ""
-}
+    if [ -f "$HOME/.gitconfig" ]; then
+        cp -p "$HOME/.gitconfig" "$txn/old-gitconfig"
+        cp -p "$HOME/.gitconfig" "$txn/gitconfig"
+        git config --file "$txn/gitconfig" --fixed-value --unset-all include.path "$TRMNL_DIR/trmnl-gitconfig" || [ "$?" -eq 5 ]
+    fi
+    for item in nvim zellij yazi starship.toml; do
+        dest="$CONFIG_DIR/$item"; entry="$STATE_DIR/$item"
+        if [ ! -L "$entry" ] && [ -f "$entry/owned" ] && [ ! -L "$entry/owned" ] &&
+            [ -L "$dest" ] && [ "$(readlink "$dest")" = "$(cat "$entry/owned")" ]; then
+            mv "$dest" "$txn/removed-$item"
+            if path_exists "$entry/previous"; then
+                : > "$txn/previous-$item"
+                mv "$entry/previous" "$dest"
+            fi
+            # Retire by move, retaining the exact entry until every publication
+            # succeeds. Rollback returns it before returning its predecessor.
+            mv "$entry" "$txn/entries/$item"
+        fi
+    done
+    if [ -f "$txn/gitconfig" ]; then
+        : > "$txn/publish-gitconfig"
+        mv "$txn/gitconfig" "$HOME/.gitconfig"
+    fi
+    if [ -f "$txn/zshrc" ]; then
+        : > "$txn/publish-zshrc"
+        mv "$txn/zshrc" "$HOME/.zshrc"
+    fi
+    echo 'Removed owned links; unrelated replacements and retained journal history were preserved.'
+)
 
 # ── Help ────────────────────────────────────────────
 cmd_help() {
@@ -326,6 +485,7 @@ cmd_help() {
     echo -e "    ${GREEN}keys${NC}        Show keybind cheat sheet"
     echo -e "    ${GREEN}doctor${NC}      Check if everything is installed"
     echo -e "    ${GREEN}uninstall${NC}   Remove config symlinks"
+    echo -e "    ${GREEN}recover${NC}     Retry recovery using a retained transaction path"
     echo -e "    ${GREEN}help${NC}        Show this message"
     echo -e "    ${GREEN}version${NC}     Show version"
     echo ""
@@ -361,6 +521,7 @@ case "${1:-launch}" in
     keys)       cmd_keys ;;
     doctor)     cmd_doctor ;;
     uninstall)  cmd_uninstall ;;
+    recover)    cmd_recover "${2:-}" ;;
     version)    echo "trmnl v${TRMNL_VERSION}" ;;
     help|-h|--help) cmd_help ;;
     launch)     cmd_launch ;;

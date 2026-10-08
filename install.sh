@@ -79,38 +79,19 @@ install_deps() {
     echo ""
 
     # These are available in most system package managers
-    local -A tools=(
-        [nvim]="neovim"
-        [fzf]="fzf"
-        [rg]="ripgrep"
-        [fd]="fd-find"
-        [bat]="bat"
-        [jq]="jq"
-        [git]="git"
-        [curl]="curl"
-    )
-
-    # Adjust package names per manager
-    if [ "$PKG" = "brew" ]; then
-        tools[fd]="fd"
-        tools[delta]="git-delta"
-        tools[eza]="eza"
-        tools[nvim]="neovim"
-    elif [ "$PKG" = "apt" ]; then
-        tools[fd]="fd-find"
-        tools[bat]="bat"
-    elif [ "$PKG" = "pacman" ]; then
-        tools[fd]="fd"
-        tools[bat]="bat"
-        tools[delta]="git-delta"
-    fi
-
-    for cmd in "${!tools[@]}"; do
+    # Portable to macOS's system Bash 3.2 (no associative arrays).
+    local cmd package entry
+    for entry in nvim:neovim fzf:fzf rg:ripgrep fd:fd-find bat:bat jq:jq git:git curl:curl; do
+        cmd="${entry%%:*}"
+        package="${entry#*:}"
+        if [ "$cmd" = fd ] && { [ "$PKG" = brew ] || [ "$PKG" = pacman ]; }; then
+            package=fd
+        fi
         if command -v "$cmd" &>/dev/null; then
             info "$cmd already installed"
         else
-            info "Installing ${tools[$cmd]}..."
-            pkg_install "$cmd" "${tools[$cmd]}" 2>/dev/null || warn "Failed to install ${tools[$cmd]} — install manually"
+            info "Installing $package..."
+            pkg_install "$cmd" "$package" || warn "Failed to install $package — install manually"
         fi
     done
 
@@ -241,52 +222,87 @@ install_deps() {
 }
 
 # ── Download and install trmnl configs ──────────────
-install_configs() {
-    echo ""
-    echo -e "${BOLD}Installing trmnl configs...${NC}"
-    echo ""
-
-    # Clean previous install
-    if [ -d "$INSTALL_DIR" ]; then
-        info "Removing previous trmnl installation..."
-        rm -rf "$INSTALL_DIR"
-    fi
-
-    # Download repo
-    info "Downloading trmnl..."
-    mkdir -p "$INSTALL_DIR"
-    if command -v git &>/dev/null; then
-        git clone --depth 1 --branch "$TRMNL_BRANCH" "https://github.com/$TRMNL_REPO.git" "$INSTALL_DIR/repo" 2>/dev/null
-        cp -r "$INSTALL_DIR/repo/config/"* "$INSTALL_DIR/"
-        cp "$INSTALL_DIR/repo/bin/trmnl" "$INSTALL_DIR/trmnl-bin"
-        rm -rf "$INSTALL_DIR/repo"
-    else
-        error "git is required to install trmnl"
-    fi
-
-    # Install binary
-    mkdir -p "$BIN_DIR"
-    cat > "$BIN_DIR/trmnl" << 'WRAPPER'
+install_configs() (
+    # Stage on the installation filesystem; never remove the working tree first.
+    set -e
+    umask 077
+    parent='' stage='' old_tree='' old_bin='' wrapper='' published=false bin_published=false
+    parent="$(dirname "$INSTALL_DIR")"
+    mkdir -p "$parent" "$BIN_DIR"
+    [ ! -L "$INSTALL_DIR" ] || error "Refusing a symlink installation directory"
+    [ ! -e "$INSTALL_DIR" ] || [ -d "$INSTALL_DIR" ] || error "Installation path is not a directory"
+    stage="$(mktemp -d "$parent/.trmnl-stage.XXXXXXXX")"
+    rollback_install() {
+        local status=$?
+        trap - EXIT HUP INT TERM
+        if [ "$status" -ne 0 ]; then
+            if [ "$bin_published" = true ]; then rm -f "$BIN_DIR/trmnl"; fi
+            if [ -n "$old_bin" ] && { [ -e "$old_bin" ] || [ -L "$old_bin" ]; }; then
+                mv "$old_bin" "$BIN_DIR/trmnl"
+            fi
+            if [ "$published" = true ]; then rm -rf "$INSTALL_DIR"; fi
+            if [ -n "$old_tree" ] && [ -d "$old_tree/tree" ]; then
+                mv "$old_tree/tree" "$INSTALL_DIR"
+            fi
+        fi
+        [ -z "$wrapper" ] || rm -f "$wrapper"
+        rm -rf "$stage"
+        exit "$status"
+    }
+    trap rollback_install EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    command -v git >/dev/null || error "git is required to install trmnl"
+    info "Downloading trmnl into staging..."
+    git clone --depth 1 --branch "$TRMNL_BRANCH" "https://github.com/$TRMNL_REPO.git" "$stage/repo"
+    mkdir "$stage/tree"
+    cp -R "$stage/repo/config/." "$stage/tree/"
+    cp "$stage/repo/bin/trmnl" "$stage/tree/trmnl-bin"
+    for entry in nvim/init.lua zellij/config.kdl zellij/layouts/dev.kdl yazi/yazi.toml yazi/keymap.toml yazi/theme.toml ghostty/config starship.toml trmnl-gitconfig zshrc-block; do
+        [ -s "$stage/tree/$entry" ] || error "Incomplete staged installation: $entry"
+    done
+    [ -s "$stage/tree/zellij/plugins/zellij-autolock.wasm" ] || error "Missing staged autolock plugin"
+    [ "$(od -An -tx1 -N8 "$stage/tree/zellij/plugins/zellij-autolock.wasm" | tr -d ' \n')" = 0061736d01000000 ] || error "Invalid staged WASM header"
+    bash -n "$stage/tree/trmnl-bin"
+    bash -n "$stage/tree/zshrc-block"
+    # Parse every Lua chunk with startup disabled; never execute configuration.
+    [ -x "$(command -v nvim 2>/dev/null)" ] || error "Neovim is required to validate staged Lua"
+    while IFS= read -r entry; do
+        TRMNL_CHECK_FILE="$entry" nvim --headless -u NONE -i NONE --noplugin -n \
+            -c 'lua local f,e=loadfile(os.getenv("TRMNL_CHECK_FILE")); if not f then print(e); vim.cmd("cquit 1") end' \
+            -c 'qa!' || error "Invalid staged Lua: $entry"
+    done < <(find "$stage/tree/nvim" -type f -name '*.lua')
+    chmod +x "$stage/tree/trmnl-bin"
+    wrapper="$(mktemp "$BIN_DIR/.trmnl-wrapper.XXXXXXXX")"
+    cat > "$wrapper" << 'WRAPPER'
 #!/bin/bash
-# trmnl wrapper — redirects TRMNL_DIR for non-Homebrew installs
-export TRMNL_DIR="$HOME/.local/share/trmnl"
+export TRMNL_DIR="${TRMNL_DIR:-$HOME/.local/share/trmnl}"
+exec "$TRMNL_DIR/trmnl-bin" "$@"
 WRAPPER
-
-    # Append the actual script, replacing the brew --prefix line
-    sed 's|TRMNL_DIR="$(brew --prefix)/share/trmnl"|TRMNL_DIR="$HOME/.local/share/trmnl"|' \
-        "$INSTALL_DIR/trmnl-bin" | tail -n +2 >> "$BIN_DIR/trmnl"
-    chmod +x "$BIN_DIR/trmnl"
-    rm -f "$INSTALL_DIR/trmnl-bin"
-
-    info "Binary installed to $BIN_DIR/trmnl"
-
-    # Ensure ~/.local/bin is in PATH
-    if ! echo "$PATH" | grep -q "$BIN_DIR"; then
-        warn "$BIN_DIR is not in your PATH"
-        warn "Add this to your ~/.zshrc or ~/.bashrc:"
-        echo -e "    ${BOLD}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}"
+    chmod 755 "$wrapper"
+    if [ -e "$INSTALL_DIR" ]; then
+        old_tree="$(mktemp -d "$parent/.trmnl-backup.XXXXXXXX")"
+        mv "$INSTALL_DIR" "$old_tree/tree"
     fi
-}
+    published=true
+    mv "$stage/tree" "$INSTALL_DIR"
+    if [ -e "$BIN_DIR/trmnl" ] || [ -L "$BIN_DIR/trmnl" ]; then
+        old_bin="$(mktemp "$BIN_DIR/.trmnl-bin-backup.XXXXXXXX")"
+        rm "$old_bin"
+        mv "$BIN_DIR/trmnl" "$old_bin"
+    fi
+    bin_published=true
+    mv "$wrapper" "$BIN_DIR/trmnl"
+    wrapper=''
+    info "Binary installed to $BIN_DIR/trmnl"
+    [ -z "$old_tree" ] || info "Previous tree preserved at $old_tree/tree"
+    [ -z "$old_bin" ] || info "Previous launcher preserved at $old_bin"
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) ;;
+        *) warn "$BIN_DIR is not in PATH; trmnl setup adds a guarded shell entry" ;;
+    esac
+)
 
 # ── Main ────────────────────────────────────────────
 main() {
@@ -315,4 +331,4 @@ main() {
     echo ""
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

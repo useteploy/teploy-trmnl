@@ -52,9 +52,9 @@ function hello() {
 - `F1` — Step Into
 - `F2` — Step Over
 - `F3` — Step Out
-- `<leader>b` — Toggle Breakpoint
-- `<leader>B` — Set Conditional Breakpoint
-- `<leader>du` — Toggle Debug UI
+- `<leader>db` — Toggle Breakpoint
+- `<leader>dB` — Set Conditional Breakpoint
+- `F7` — Toggle Debug UI
 
 ## Testing
 
@@ -64,13 +64,13 @@ Run tests with Neotest:
 - `<leader>tn` — Run nearest test
 - `<leader>ts` — Show test summary
 - `<leader>tl` — Run last test
-- `<leader>tf` — Show failed tests
+- `<leader>tf` — Open test result summary to inspect failures
 
 Supports: Python, JavaScript/TypeScript, Go, Rust
 
 ## Language Servers
 
-All language servers are lazy-loaded and installed automatically via Mason when needed. Currently configured for 60+ languages.
+Language-server attachment occurs when a matching file is opened. Mason installation requests are assembled during configuration initialization; tools may be installed before that language is opened. The configured plugin and tool versions require separate runtime validation.
 
 Install additional servers manually:
 ```bash

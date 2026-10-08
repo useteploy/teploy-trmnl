@@ -116,14 +116,22 @@ To run a Zellij action *over* a Neovim pane: press `Ctrl+g` to take manual contr
 
 ## Configuration
 
-All config is symlinked from the Homebrew install into `~/.config/`:
+All config is symlinked from the installation into `${XDG_CONFIG_HOME:-$HOME/.config}/`:
 
 - `nvim/` — Neovim (Kickstart-based)
 - `zellij/` — Multiplexer
 - `yazi/` — File manager
 - `starship.toml` — Prompt
 
-Git config is added as an `[include]` in your existing `~/.gitconfig` — your user settings are preserved.
+Setup validates source files before changing configuration. Previous files, directories and symlinks are retained in `${XDG_CONFIG_HOME:-$HOME/.config}/.trmnl-links/`; uninstall restores a predecessor only while its destination still points at the recorded trmnl target. User replacements are preserved, with unresolved backups retained in the journal. Setup refuses symlinked `.zshrc`/`.gitconfig` rather than replacing dotfiles-manager links; integrate these files manually in that case. Run setup/uninstall one at a time. Ordinary command failures and HUP/INT/TERM restore pre-operation links, journal entries, shell and Git configuration. If recovery encounters another error, the manager prints the retained private transaction path. Resolve the filesystem error, then run `trmnl recover /absolute/printed/path` with the same HOME, XDG_CONFIG_HOME and TRMNL_DIR before retrying setup/uninstall. Recovery retries retain their material until restoration succeeds.
+
+Predecessor copies use physical `cp -pRP` to preserve file/directory access modes (including nested executable bits), bytes and ordinary/broken symlinks. The journal root remains private (0700). Ownership, ACLs and extended attributes are not guaranteed across supported platforms/filesystems; copy failures abort setup without consuming the original. These are ordinary-error and catchable-signal recovery guarantees under serial use, not an fsync/power-loss or SIGKILL transaction. Concurrent external edits are outside this guarantee.
+
+The dependency-free manager fault fixtures can be run with `python3 tests/check_transactions.py /absolute/private/evidence-directory`. They execute the actual manager using private HOME/XDG trees, inspect bytes/types/modes and inject move/copy/publication/signal/recovery failures; they do not load editor plugins or run the vendored WASM.
+
+Git config is added as an exact `[include]` in your existing `~/.gitconfig`. Setup atomically replaces one delimited shell block, including a guarded `$HOME/.local/bin` PATH entry. Malformed delimiters are rejected. `trmnl doctor` exits 1 when required tools/configuration are missing or a required tool's version command fails; optional font/terminal warnings remain nonfatal.
+
+The standalone installer stages and checks configuration and launcher files before replacing the installed tree. It rolls back ordinary command failures and HUP/INT/TERM, and retains the previous tree and launcher as private backups after success. The directory replacement uses two renames, so it is not a zero-gap exchange or a power-loss transaction; keep the printed backup paths for recovery after an uncatchable interruption. No existing customizations are silently deleted.
 
 Ghostty config is available at `$(brew --prefix)/share/trmnl/ghostty/config` — copy it to `~/.config/ghostty/config` if you use Ghostty.
 
@@ -136,6 +144,12 @@ See `CONFIG_GUIDE_COMPLETE.md` for detailed setup of each tool.
 - A Nerd Font: `brew install --cask font-jetbrains-mono-nerd-font`
 - Recommended terminal: [Ghostty](https://ghostty.org) (`brew install --cask ghostty`)
 - Optional: `ANTHROPIC_API_KEY` for AI features
+
+## Source validation
+
+`bash test_suite.sh` checks source structure, syntax and literal leader mappings in a private temporary HOME. It requires executable Neovim, Zsh, Ruby and Python 3 for those checks. Neovim uses `-u NONE -i NONE --noplugin` and `loadfile`; configuration is compiled without executing plugin bootstrap. Missing validators and nonzero validator exits fail. The static mapping checker ignores Lua comments and distinguishes modes; dynamic, conditional and plugin-generated mappings need independent editor validation.
+
+JavaScript debugging expects Mason's `js-debug-adapter` directory containing `js-debug/src/dapDebugServer.js`, launched with Node. Install and verify a compatible adapter separately. The generic Linux/WSL Yazi opener uses `xdg-open` from `xdg-utils`; WSL requires a functioning desktop/system opener. Source validation does not establish plugin execution, DAP breakpoints, native builds, package-manager behavior or Linux/WSL/macOS functional acceptance. The vendored autolock WASM and moving Lazy/Mason inputs also require independent provenance/runtime checks.
 
 ## Credits
 

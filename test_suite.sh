@@ -1,5 +1,5 @@
 #!/bin/bash
-# trmnl v0.1.0 Test Suite
+# trmnl v0.1.2 Test Suite
 # Tests all configs, keybinds, syntax, and dependencies
 
 set -e
@@ -10,6 +10,11 @@ WARN=0
 
 # Base directory — auto-detect from script location
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+# No user init, shada, plugin, or cache state is used by this source checker.
+VALIDATION_HOME="$(mktemp -d "${TMPDIR:-/tmp}/trmnl-source-check.XXXXXXXX")"
+export HOME="$VALIDATION_HOME"
+export XDG_CONFIG_HOME="$HOME/config" XDG_DATA_HOME="$HOME/data" XDG_CACHE_HOME="$HOME/cache" XDG_STATE_HOME="$HOME/state"
+trap 'rm -rf "$VALIDATION_HOME"' EXIT
 
 # Colors
 GREEN='\033[0;32m'
@@ -19,7 +24,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 echo -e "${BLUE}════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}  trmnl v0.1.0 — Test Suite${NC}"
+echo -e "${BLUE}  trmnl v0.1.2 — Test Suite${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════${NC}"
 echo ""
 
@@ -69,24 +74,19 @@ echo ""
 # ── TEST 2: Neovim Config Syntax ──────────────────────────────────
 echo -e "${BLUE}TEST 2: Neovim Configuration${NC}"
 
-nvim_files=(
-  "config/nvim/init.lua"
-  "config/nvim/lua/custom/plugins/codecompanion.lua"
-  "config/nvim/lua/custom/plugins/neotest.lua"
-  "config/nvim/lua/custom/plugins/harpoon.lua"
-  "config/nvim/lua/kickstart/plugins/debug.lua"
-)
-
-for file in "${nvim_files[@]}"; do
-  filepath="$BASE_DIR/$file"
-  if [ -f "$filepath" ]; then
-    if nvim --headless -c "lua dofile('$filepath')" -c "quit" 2>&1 | grep -q "error\|Error"; then
-      test_fail "Lua syntax error in: $file"
+if [ ! -x "$(command -v nvim 2>/dev/null)" ]; then
+  test_fail "Neovim executable unavailable; Lua syntax was not checked"
+else
+  while IFS= read -r filepath; do
+    if TRMNL_CHECK_FILE="$filepath" nvim --headless -u NONE -i NONE --noplugin -n \
+        -c 'lua local f,e=loadfile(os.getenv("TRMNL_CHECK_FILE")); if not f then print(e); vim.cmd("cquit 1") end' \
+        -c 'qa!' ; then
+      test_pass "Lua syntax valid: ${filepath#"$BASE_DIR/"}"
     else
-      test_pass "Lua syntax valid: $file"
+      test_fail "Lua parse/editor process failed: ${filepath#"$BASE_DIR/"}"
     fi
-  fi
-done
+  done < <(find "$BASE_DIR/config/nvim" -type f -name '*.lua')
+fi
 
 echo ""
 
@@ -115,11 +115,14 @@ echo -e "${BLUE}TEST 4: Shell Configuration${NC}"
 
 zshrc_block="$BASE_DIR/config/zshrc-block"
 if [ -f "$zshrc_block" ]; then
-  if bash -n "$zshrc_block" 2>&1 | grep -q "syntax error"; then
-    test_fail "Shell syntax errors in zshrc-block"
+  if [ -x "$(command -v zsh 2>/dev/null)" ] && zsh -n "$zshrc_block"; then
+    test_pass "Zsh syntax valid"
   else
-    test_pass "Shell syntax valid"
+    test_fail "Zsh executable unavailable or shell syntax check failed"
   fi
+  for script in install.sh bin/trmnl test_suite.sh; do
+    if bash -n "$BASE_DIR/$script"; then test_pass "Bash syntax: $script"; else test_fail "Bash syntax: $script"; fi
+  done
 
   checks=(
     "starship"
@@ -163,10 +166,10 @@ echo -e "${BLUE}TEST 5: Homebrew Formula${NC}"
 
 formula_file="$BASE_DIR/Formula/trmnl.rb"
 if [ -f "$formula_file" ]; then
-  if ruby -c "$formula_file" 2>&1 | grep -q "Syntax OK"; then
+  if [ -x "$(command -v ruby 2>/dev/null)" ] && ruby -c "$formula_file"; then
     test_pass "Formula Ruby syntax valid"
   else
-    test_warn "Could not verify Ruby syntax"
+    test_fail "Ruby executable unavailable or formula syntax invalid"
   fi
 
   deps=(
@@ -222,7 +225,7 @@ tools=(
 
 for tool in "${tools[@]}"; do
   IFS=':' read -r cmd name <<< "$tool"
-  if command -v "$cmd" &>/dev/null; then
+  if [ -x "$(command -v "$cmd" 2>/dev/null)" ]; then
     test_pass "Tool installed: $name ($cmd)"
   else
     test_warn "Tool not installed: $name ($cmd) - will be installed by Formula"
@@ -234,20 +237,11 @@ echo ""
 # ── TEST 7: Keybind Conflicts ─────────────────────────────────────
 echo -e "${BLUE}TEST 7: Keybind Analysis${NC}"
 
-# Check for duplicate leader keybinds across all nvim config files
-all_keybinds=$(grep -rh "'<leader>" "$BASE_DIR/config/nvim/" 2>/dev/null | grep -o "'<leader>[^']*'" | sort)
-
-if echo "$all_keybinds" | uniq -d | grep -q .; then
-  test_fail "Duplicate Neovim keybinds detected:"
-  echo "$all_keybinds" | uniq -d | while read -r dup; do
-    echo "    $dup"
-  done
+if [ -x "$(command -v python3 2>/dev/null)" ] && python3 "$BASE_DIR/tests/check_keymaps.py" "$BASE_DIR/config/nvim"; then
+  test_pass "No duplicate literal Neovim leader mappings in overlapping modes"
 else
-  test_pass "No duplicate Neovim keybinds"
+  test_fail "Keymap analysis failed or Python 3 executable unavailable"
 fi
-
-count=$(echo "$all_keybinds" | wc -l | tr -d ' ')
-test_pass "Total Neovim keybinds: $count"
 
 echo ""
 
@@ -357,11 +351,11 @@ for plugin in "${plugin_files[@]}"; do
   fi
 done
 
-# Check for duplicate plugin declarations
-if grep -c "mini.nvim" "$init_lua" 2>/dev/null | grep -q "^1$"; then
-  test_pass "No duplicate mini.nvim declarations"
-elif grep -c "mini.nvim" "$init_lua" 2>/dev/null | grep -q "^[2-9]"; then
-  test_fail "Duplicate mini.nvim declarations found"
+# Only repository string tokens count; prose/comments do not declare plugins.
+if [ -x "$(command -v python3 2>/dev/null)" ] && python3 "$BASE_DIR/tests/check_keymaps.py" "$BASE_DIR/config/nvim" --plugin mini.nvim; then
+  test_pass "One active literal mini.nvim declaration"
+else
+  test_fail "mini.nvim declaration analysis failed"
 fi
 
 echo ""
@@ -399,7 +393,7 @@ echo -e "  ${YELLOW}Warnings:${NC} $WARN"
 echo ""
 
 if [ $FAIL -eq 0 ]; then
-  echo -e "${GREEN}✓ ALL TESTS PASSED${NC}"
+  echo -e "${GREEN}✓ SOURCE CHECKS PASSED — plugin/platform runtime acceptance is separate${NC}"
   echo ""
   exit 0
 else

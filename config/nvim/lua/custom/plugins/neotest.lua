@@ -12,11 +12,11 @@ return {
       'rouge8/neotest-rust',
     },
     keys = {
-      { '<leader>tr', '<cmd>Neotest run<CR>', desc = '[T]est [R]un' },
-      { '<leader>tn', '<cmd>Neotest nearest<CR>', desc = '[T]est [N]earest' },
-      { '<leader>ts', '<cmd>Neotest summary<CR>', desc = '[T]est [S]ummary' },
-      { '<leader>tl', '<cmd>Neotest last<CR>', desc = '[T]est [L]ast' },
-      { '<leader>tf', '<cmd>Neotest failed<CR>', desc = '[T]est [F]ailed' },
+      { '<leader>tr', function() require('neotest').run.run(vim.fn.expand '%:p') end, desc = '[T]est [R]un' },
+      { '<leader>tn', function() require('neotest').run.run() end, desc = '[T]est [N]earest' },
+      { '<leader>ts', function() require('neotest').summary.toggle() end, desc = '[T]est [S]ummary' },
+      { '<leader>tl', function() require('neotest').run.run_last() end, desc = '[T]est [L]ast' },
+      { '<leader>tf', function() require('neotest').summary.open() end, desc = '[T]est [F]ailure summary' },
     },
     config = function()
       require('neotest').setup {
